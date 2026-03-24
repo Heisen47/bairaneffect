@@ -1,44 +1,56 @@
 # Video Template Automation
 
-Create dynamic videos with a freeze frame transition, background removal, and slideshow effect.
+Create dynamic videos with a freeze-frame transition, AI background removal, and a slideshow curtain effect.
 
-## Project Structure
+## 🚀 Quick Start
 
-```
-bairantool/
-├── middle-images/          # Images for slideshow
-├── output/                 # Generated output files
-├── rosh-freeze.MP4         # Main source video
-├── middle-video.mp4        # (Optional) Middle video source
-├── ffmpeg                  # FFmpeg binary (macOS)
-├── ffprobe                 # FFprobe binary (macOS)
-├── step1-extract-last-frame.js
-├── step2-remove-background.js
-├── step3-add-borders.js
-├── step4-compose-video.js
-├── create-middle-slideshow.js
-├── server.js               # API Server
-└── package.json
-```
+Follow these simple steps to generate your video:
 
-## Setup
-
+### 1. Install Dependencies
 ```bash
-npm install
+npm i
 ```
 
-## Usage
-
-### API Server (Recommended)
-
-Start the server:
+### 2. Start the Server
 ```bash
 npm start
 ```
 
-Server runs on `http://localhost:3001`
+### 3. Generate Video
+1. Open your browser and go to **[http://localhost:3001](http://localhost:3001)**
+2. **Upload** your main video file (e.g., `.mov` or `.mp4`).
+3. *(Optional)* Upload a `.zip` file containing photos for the middle slideshow.
+4. Click **Start Processing** and wait for the automation to finish.
+5. Once it's done, click the **Download** link to get your final composed video!
 
-#### Process Video
+---
+
+## 🛠 How It Works
+
+Behind the scenes, the automation runs a 4-step processing pipeline:
+
+1. **Extract Last Frame**: Grabs the very last frame of your uploaded video.
+2. **AI Background Removal**: Uses `@imgly/background-removal-node` (runs locally, no API key needed) to cut out the subject from the frame.
+3. **Sticker Effect**: Adds crisp, white borders around the subject to create a professional "sticker" look.
+4. **Compose Final Video**: Extends the main video, creates a center-out curtain reveal revealing the middle photos, and overlays the sticker on top.
+
+## 📁 Project Structure
+
+```
+bairaneffect/
+├── server.js               # Web UI & API Server
+├── step1-extract-last-frame.js
+├── step2-remove-background.js # Local ML background removal
+├── step3-add-borders.js    # Sharp-based image dilation
+├── step4-compose-video.js  # FFmpeg composition magic
+├── create-middle-slideshow.js
+├── package.json
+└── temp-uploads/           # Temporary storage during processing
+```
+
+## ⚙️ Advanced: API Usage
+
+If you prefer to use the API directly instead of the web UI:
 
 ```bash
 curl -X POST http://localhost:3001/process \
@@ -48,168 +60,11 @@ curl -X POST http://localhost:3001/process \
     "isUrl": false
   }'
 ```
-
-Or with a URL:
-```bash
-curl -X POST http://localhost:3001/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "videoPath": "https://example.com/video.mp4",
-    "isUrl": true
-  }'
-```
-
-With zip of images:
-```bash
-curl -X POST http://localhost:3001/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "videoPath": "path/to/video.mp4",
-    "isUrl": false,
-    "zipPath": "path/to/images.zip",
-    "zipUrl": false
-  }'
-```
-
-Or all URLs:
-```bash
-curl -X POST http://localhost:3001/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "videoPath": "https://example.com/video.mp4",
-    "isUrl": true,
-    "zipPath": "https://example.com/images.zip",
-    "zipUrl": true
-  }'
-```
-
-#### Response
-
+Response:
 ```json
 {
   "success": true,
   "outputPath": "output/final-video.mp4",
   "outputUrl": "/download/final-video.mp4"
 }
-```
-
-#### Download Output
-
-```bash
-curl -O http://localhost:3001/download/final-video.mp4
-```
-
----
-
-### Local Usage
-
-### 1. Prepare Images (Optional)
-
-Place images in `middle-images/` folder. Supports JPG, PNG, HEIC.
-
-### 2. Create Slideshow (Optional)
-
-```bash
-npm run slideshow
-```
-
-Creates `output/middle-slideshow.mp4` - a looping slideshow from images (9s duration, 0.2s per image).
-
-### 3. Run Pipeline
-
-```bash
-npm run step1   # Extract last frame from video
-npm run step2   # Remove background from frame
-npm run step3   # Add borders to create sticker
-npm run step4   # Compose final video
-```
-
-Or run all at once:
-```bash
-npm run step1 && npm run step2 && npm run step3 && npm run step4
-```
-
-## Step Details
-
-| Step | Output | Description |
-|------|--------|-------------|
-| 1 | `output/last-frame.png` | Extracts the last frame from `rosh-freeze.MP4` |
-| 2 | `output/bg-removed.png` | Removes background using AI |
-| 3 | `output/bordered-image.png` | Adds white/black borders creating a sticker |
-| 4 | `output/final-video.mp4` | Composites everything with center-out curtain effect |
-
-## Configuration
-
-### Middle Video Source (step4)
-- If `output/middle-slideshow.mp4` exists → uses slideshow
-- Otherwise → uses `middle-video.mp4`
-
-### Slideshow Settings (create-middle-slideshow.js)
-- Duration: 9 seconds
-- Per-image duration: 0.2 seconds
-- Resolution: 1080x1920 (vertical)
-- Loops through images to fill duration
-
-## Requirements
-
-- macOS (uses `sips` for image conversion)
-- Node.js dependencies (installed via `npm install`)
-
-## API Server
-
-Start the API server:
-
-```bash
-npm start
-```
-
-Server runs on `http://localhost:3001`
-
-### Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/process` | Process a video |
-| GET | `/download/:filename` | Download output file |
-| GET | `/status` | Check server status |
-
-### Process Request
-
-```bash
-curl -X POST http://localhost:3001/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "videoPath": "path/to/video.mp4",
-    "isUrl": false,
-    "zipPath": "path/to/images.zip",
-    "zipUrl": false
-  }'
-```
-
-With URLs:
-```bash
-curl -X POST http://localhost:3001/process \
-  -H "Content-Type: application/json" \
-  -d '{
-    "videoPath": "https://example.com/video.mp4",
-    "isUrl": true,
-    "zipPath": "https://example.com/images.zip",
-    "zipUrl": true
-  }'
-```
-
-### Response
-
-```json
-{
-  "success": true,
-  "outputPath": "output/final-video.mp4",
-  "outputUrl": "/download/final-video.mp4"
-}
-```
-
-### Download Output
-
-```bash
-curl -O http://localhost:3001/download/final-video.mp4
 ```
