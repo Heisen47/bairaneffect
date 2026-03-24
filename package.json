@@ -12,12 +12,13 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@fal-ai/client": "^1.0.0",
+    "@imgly/background-removal-node": "^1.4.5",
     "express": "^4.22.1",
     "ffmpeg-transitions": "^1.0.8",
     "fluent-ffmpeg": "^2.1.2",
     "form-data": "^4.0.0",
     "heic-convert": "^2.1.0",
+    "multer": "^2.1.1",
     "sharp": "^0.34.5"
   }
 }

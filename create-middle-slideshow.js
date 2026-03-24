@@ -18,16 +18,30 @@ async function createSlideshow() {
   console.log(`🎬 Creating looping slideshow from ${IMAGES_DIR}\n`);
   console.log(`Output: ${OUTPUT}\n`);
 
-  const files = fs.readdirSync(IMAGES_DIR)
-    .filter(f => /\.(jpg|jpeg|png|heic|HEIC|JPG|JPEG)$/.test(f))
-    .sort();
+  function collectImageFiles(dir) {
+    const imageExt = /\.(jpg|jpeg|png|heic)$/i;
+    let collected = [];
+    for (const entry of fs.readdirSync(dir)) {
+      if (entry.startsWith('.') || entry === '__MACOSX') continue;
+      const fullPath = path.join(dir, entry);
+      const stat = fs.statSync(fullPath);
+      if (stat.isDirectory()) {
+        collected = collected.concat(collectImageFiles(fullPath));
+      } else if (stat.isFile() && imageExt.test(entry)) {
+        collected.push(fullPath);
+      }
+    }
+    return collected;
+  }
 
-  if (files.length === 0) {
+  const imageFiles = collectImageFiles(IMAGES_DIR).sort();
+
+  if (imageFiles.length === 0) {
     console.error(`No images found in ${IMAGES_DIR}`);
     process.exit(1);
   }
 
-  console.log(`Found ${files.length} images`);
+  console.log(`Found ${imageFiles.length} images`);
   console.log(`Each image displays for ${IMAGE_DURATION}s`);
 
   const totalFrames = Math.ceil(DURATION / IMAGE_DURATION);
@@ -40,56 +54,47 @@ async function createSlideshow() {
 
   console.log('Converting to JPG (parallel)...');
   
-  const convertImage = async (file, idx) => {
-    const ext = path.extname(file).toLowerCase();
-    const jpgPath = path.join(tempDir, `img_${String(idx).padStart(2, '0')}.jpg`);
-    const inputPath = path.join(IMAGES_DIR, file);
-    
+  const convertedFiles = [];
+  for (let idx = 0; idx < imageFiles.length; idx++) {
+    const inputPath = imageFiles[idx];
+    const ext = path.extname(inputPath).toLowerCase();
+    const jpgPath = path.join(tempDir, `img_${String(idx + 1).padStart(3, '0')}.jpg`);
+
     try {
       if (ext === '.heic') {
         const inputBuffer = fs.readFileSync(inputPath);
-        const outputBuffer = await heicConvert({
-          buffer: inputBuffer,
-          format: 'JPEG',
-          quality: 0.95
-        });
+        const outputBuffer = await heicConvert({ buffer: inputBuffer, format: 'JPEG', quality: 0.95 });
         fs.writeFileSync(jpgPath, outputBuffer);
       } else {
         execSync(`convert "${inputPath}" "${jpgPath}"`, { stdio: 'ignore' });
       }
-      return { file, success: true };
+      convertedFiles.push(jpgPath);
     } catch (e) {
-      return { file, success: false, error: e.message };
+      console.log(`✗ Failed convert: ${inputPath} — ${e.message}`);
     }
-  };
-  
-  const convertPromises = files.map((file, idx) => convertImage(file, idx + 1));
-  const results = await Promise.all(convertPromises);
-  
-  const succeeded = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success);
-  
-  console.log(`✓ Converted ${succeeded}/${files.length} images`);
-  if (failed.length > 0) {
-    failed.forEach(f => console.log(`✗ Failed: ${f.file} - ${f.error}`));
   }
+
+  if (convertedFiles.length === 0) {
+    console.error('No images could be converted to JPG, stopping slideshow creation.');
+    process.exit(1);
+  }
+
+  console.log(`✓ Converted ${convertedFiles.length}/${imageFiles.length} images`);
   console.log('');
 
   const listFile = path.join(tempDir, 'list.txt');
   let listContent = '';
   
   for (let i = 0; i < totalFrames; i++) {
-    const imgIndex = i % files.length;
-    const imgPath = path.resolve(tempDir, `img_${String(imgIndex + 1).padStart(2, '0')}.jpg`);
-    if (fs.existsSync(imgPath)) {
-      listContent += `file '${imgPath}'\n`;
-      listContent += `duration ${IMAGE_DURATION}\n`;
-    }
+    const imgIndex = i % convertedFiles.length;
+    const imgPath = path.basename(convertedFiles[imgIndex]);
+    listContent += `file '${imgPath}'\n`;
+    listContent += `duration ${IMAGE_DURATION}\n`;
   }
-  const lastImgIndex = totalFrames % files.length;
-  const lastImg = path.resolve(tempDir, `img_${String(lastImgIndex + 1).padStart(2, '0')}.jpg`);
-  if (fs.existsSync(lastImg)) {
-    listContent += `file '${lastImg}'\n`;
+
+  const lastImg = convertedFiles[(totalFrames - 1) % convertedFiles.length];
+  if (lastImg) {
+    listContent += `file '${path.basename(lastImg)}'\n`;
   }
 
   fs.writeFileSync(listFile, listContent);

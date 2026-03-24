@@ -9,6 +9,19 @@ const FormData = require('form-data');
 const app = express();
 app.use(express.json({ limit: '100mb' }));
 
+const multer = require('multer');
+const uploadTempDir = path.join(__dirname, 'temp-uploads');
+if (!fs.existsSync(uploadTempDir)) fs.mkdirSync(uploadTempDir, { recursive: true });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadTempDir),
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, uniqueSuffix + ext);
+  }
+});
+const upload = multer({ storage });
+
 const FFMPEG = 'ffmpeg';
 const TEMP_BASE_DIR = 'temp-requests';
 
@@ -45,16 +58,27 @@ function generateRequestId() {
 }
 
 async function uploadToStoreFile(filePath, userId) {
-  const url = process.env.PORT;
-  
+ const url = process.env.STORE_API_URL;
+
+  if (!url) {
+    console.warn('STORE_API_URL not configured; skipping external upload and using local server output path.');
+    const stats = fs.statSync(filePath);
+    return {
+      fileUrl: `/download/${path.basename(filePath)}`,
+      fileId: null,
+      originalFilename: path.basename(filePath),
+      fileSize: stats.size
+    };
+  }
+
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
     form.append('userid', userId);
-    
+
     const parsedUrl = new URL(url);
     const protocol = parsedUrl.protocol === 'https:' ? https : http;
-    
+
     const options = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
@@ -62,7 +86,7 @@ async function uploadToStoreFile(filePath, userId) {
       method: 'POST',
       headers: form.getHeaders()
     };
-    
+
     const req = protocol.request(options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -78,7 +102,7 @@ async function uploadToStoreFile(filePath, userId) {
         }
       });
     });
-    
+
     req.on('error', reject);
     form.pipe(req);
   });
@@ -229,9 +253,18 @@ async function processVideo(videoPath, isUrl = false, zipPath = null, zipUrl = f
     await runStep(4, workDir);
 
     const finalVideo = path.join(outputDir, 'final-video.mp4');
-    
+
+    const persistentOutputDir = path.join(__dirname, 'output');
+    if (!fs.existsSync(persistentOutputDir)) {
+      fs.mkdirSync(persistentOutputDir, { recursive: true });
+    }
+
+    const finalFilename = `${requestId}-final-video.mp4`;
+    const persistentFinalVideo = path.join(persistentOutputDir, finalFilename);
+    fs.copyFileSync(finalVideo, persistentFinalVideo);
+
     console.log('Uploading final video to store-file...');
-    const uploadResult = await uploadToStoreFile(finalVideo, effectiveUserId);
+    const uploadResult = await uploadToStoreFile(persistentFinalVideo, effectiveUserId);
     console.log(`Upload complete: ${uploadResult.fileUrl}`);
 
     if (isUrl && fs.existsSync(tempVideo)) {
@@ -243,10 +276,12 @@ async function processVideo(videoPath, isUrl = false, zipPath = null, zipUrl = f
 
     return {
       success: true,
+      outputPath: persistentFinalVideo,
+      outputUrl: uploadResult.fileUrl || `/download/${finalFilename}`,
       fileUrl: uploadResult.fileUrl,
       fileId: uploadResult.fileId,
-      originalFilename: uploadResult.originalFilename,
-      fileSize: uploadResult.fileSize
+      originalFilename: uploadResult.originalFilename || finalFilename,
+      fileSize: uploadResult.fileSize || fs.statSync(persistentFinalVideo).size
     };
   } catch (error) {
     console.error('Error:', error.message);
@@ -256,6 +291,96 @@ async function processVideo(videoPath, isUrl = false, zipPath = null, zipUrl = f
     throw error;
   }
 }
+
+app.get('/', (req, res) => {
+  res.send(`
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Video Template Automation</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; line-height: 1.5; }
+    .spinner { display: none; width: 48px; height: 48px; border: 5px solid #ccc; border-top-color: #007bff; border-radius: 50%; animation: spin 1s linear infinite; margin: 20px auto; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none; }
+    .output { margin-top: 1rem; padding: 1rem; background: #f9f9f9; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <h1>Upload Video + Optional Zip Images</h1>
+  <form id="uploadForm">
+    <label>Video file:<br/><input type="file" name="video" accept="video/*" required /></label><br/><br/>
+    <label>Images ZIP (optional):<br/><input type="file" name="zip" accept=".zip" /></label><br/><br/>
+    <button type="submit">Start Processing</button>
+  </form>
+  <div class="spinner" id="spinner"></div>
+  <div class="output" id="result" aria-live="polite"></div>
+
+  <script>
+    const form = document.getElementById('uploadForm');
+    const spinner = document.getElementById('spinner');
+    const result = document.getElementById('result');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      result.innerHTML = '';
+      spinner.style.display = 'block';
+
+      const data = new FormData(form);
+
+      try {
+        const response = await fetch('/upload', { method: 'POST', body: data });
+        const json = await response.json();
+
+        if (!response.ok) {
+          result.innerHTML = '<strong style="color:red;">Error: ' + (json.error || 'Processing failed') + '</strong>';
+          return;
+        }
+
+        const dlUrl = json.outputUrl || json.fileUrl;
+        result.innerHTML = '<strong>Success!</strong><br/>' +
+          'Output Path: ' + json.outputPath + '<br/>' +
+          'Download: <a href="' + dlUrl + '" target="_blank">' + dlUrl + '</a>';
+      } catch (err) {
+        result.innerHTML = '<strong style="color:red;">Network error: ' + err.message + '</strong>';
+      } finally {
+        spinner.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+</html>
+  `);
+});
+
+app.post('/upload', upload.fields([{ name: 'video', maxCount: 1 }, { name: 'zip', maxCount: 1 }]), async (req, res) => {
+  const videoFile = req.files?.video?.[0];
+  const zipFile = req.files?.zip?.[0];
+
+  if (!videoFile) {
+    return res.status(400).json({ error: 'Video file is required' });
+  }
+
+  const videoPath = videoFile.path;
+  const zipPath = zipFile ? zipFile.path : null;
+
+  try {
+    const result = await processVideo(videoPath, false, zipPath, false, null, null);
+    return res.json(result);
+  } catch (error) {
+    console.error('upload error', error);
+    return res.status(500).json({ success: false, error: error.message });
+  } finally {
+    // Clean uploaded temp files
+    try {
+      if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+      if (zipPath && fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+    } catch (cleanupErr) {
+      console.warn('Failed to cleanup upload temp files', cleanupErr.message);
+    }
+  }
+});
 
 app.post('/process', async (req, res) => {
   try {
